@@ -51,26 +51,52 @@ function hw_is_checkout_store_api(): bool {
     if (strpos($u, '/wc/store/') === false && strpos($u, '/wp-json/wc/store/') === false) return false;
     return (strpos($u, '/checkout') !== false) || (strpos($u, '/shipping-rates') !== false) || (strpos($u, '/cart/extensions') !== false);
 }
+function hw_guard_allow_flags(): array {
+    static $flags = null;
+    if ($flags !== null) {
+        return $flags;
+    }
+
+    $allow_biteship = false;
+    if (hw_is_admin_like()) {
+        $allow_biteship = true;
+    } elseif (hw_is_checkout_like_path()) {
+        $allow_biteship = true;
+    } elseif (function_exists('is_checkout') && is_checkout()) {
+        $allow_biteship = true;
+    } elseif (hw_is_checkout_wc_ajax()) {
+        $allow_biteship = true;
+    } elseif (hw_is_checkout_store_api()) {
+        $allow_biteship = true;
+    }
+
+    $allow_yith = hw_is_admin_like() ? true : hw_is_pos_request();
+
+    $flags = [
+        'biteship' => $allow_biteship,
+        'yith'     => $allow_yith,
+    ];
+
+    return $flags;
+}
+
 function hw_allow_biteship_now(): bool {
-    if (hw_is_admin_like()) return true;
-    if (hw_is_checkout_like_path()) return true;
-    if (function_exists('is_checkout') && is_checkout()) return true;
-    if (hw_is_checkout_wc_ajax()) return true;
-    if (hw_is_checkout_store_api()) return true;
-    return false;
+    $flags = hw_guard_allow_flags();
+    return $flags['biteship'];
 }
 function hw_allow_yith_now(): bool {
-    if (hw_is_admin_like()) return true;
-    return hw_is_pos_request();
+    $flags = hw_guard_allow_flags();
+    return $flags['yith'];
 }
 
 /* ======================================
  * Debug header untuk verifikasi cepat
  * ====================================== */
 add_action('send_headers', function(){
+    $flags = hw_guard_allow_flags();
     if (headers_sent()) return;
-    header('X-HW-Guard: B:' . (hw_allow_biteship_now() ? 'on' : 'off')
-        . ';Y:' . (hw_allow_yith_now() ? 'on' : 'off')
+    header('X-HW-Guard: B:' . ($flags['biteship'] ? 'on' : 'off')
+        . ';Y:' . ($flags['yith'] ? 'on' : 'off')
         . ';path=' . hw_request_path());
 }, 0);
 
@@ -80,22 +106,26 @@ add_action('send_headers', function(){
  * ============================================================ */
 function hw_unhook_all_from_dir(string $dir_fragment, array $hooks){
     global $wp_filter;
+    static $file_cache = [];
     foreach ($hooks as $hook) {
         if (empty($wp_filter[$hook])) continue;
         foreach ($wp_filter[$hook]->callbacks ?? [] as $prio => $callbacks) {
             foreach ($callbacks as $cb_id => $cb) {
                 $callable = $cb['function'];
-                $file = null;
-                if (is_array($callable)) {
-                    if (is_object($callable[0])) {
-                        try { $ref = new ReflectionMethod($callable[0], $callable[1]); $file = $ref->getFileName(); } catch (\Throwable $e) {}
-                    } elseif (is_string($callable[0])) {
-                        try { $ref = new ReflectionMethod($callable[0], $callable[1]); $file = $ref->getFileName(); } catch (\Throwable $e) {}
+                $file = $file_cache[$cb_id] ?? null;
+                if ($file === null) {
+                    if (is_array($callable)) {
+                        if (is_object($callable[0])) {
+                            try { $ref = new ReflectionMethod($callable[0], $callable[1]); $file = $ref->getFileName(); } catch (\Throwable $e) {}
+                        } elseif (is_string($callable[0])) {
+                            try { $ref = new ReflectionMethod($callable[0], $callable[1]); $file = $ref->getFileName(); } catch (\Throwable $e) {}
+                        }
+                    } elseif ($callable instanceof Closure) {
+                        try { $ref = new ReflectionFunction($callable); $file = $ref->getFileName(); } catch (\Throwable $e) {}
+                    } elseif (is_string($callable) && function_exists($callable)) {
+                        try { $ref = new ReflectionFunction($callable); $file = $ref->getFileName(); } catch (\Throwable $e) {}
                     }
-                } elseif ($callable instanceof Closure) {
-                    try { $ref = new ReflectionFunction($callable); $file = $ref->getFileName(); } catch (\Throwable $e) {}
-                } elseif (is_string($callable) && function_exists($callable)) {
-                    try { $ref = new ReflectionFunction($callable); $file = $ref->getFileName(); } catch (\Throwable $e) {}
+                    $file_cache[$cb_id] = $file;
                 }
                 if ($file && stripos($file, $dir_fragment) !== false) {
                     remove_filter($hook, $callable, $prio);
@@ -132,13 +162,15 @@ add_filter('woocommerce_shipping_methods', function($methods){
  * 3) Blokir URL asset yang langsung menunjuk ke folder Biteship/YITH
  * ============================================================ */
 add_filter('script_loader_src', function($src){
-    if (!hw_allow_biteship_now() && stripos($src, '/wp-content/plugins/biteship/') !== false) return false;
-    if (!hw_allow_yith_now()     && stripos($src, '/wp-content/plugins/yith-point-of-sale-for-woocommerce-premium/') !== false) return false;
+    $flags = hw_guard_allow_flags();
+    if (!$flags['biteship'] && stripos($src, '/wp-content/plugins/biteship/') !== false) return false;
+    if (!$flags['yith']     && stripos($src, '/wp-content/plugins/yith-point-of-sale-for-woocommerce-premium/') !== false) return false;
     return $src;
 }, 9999);
 add_filter('style_loader_src', function($src){
-    if (!hw_allow_biteship_now() && stripos($src, '/wp-content/plugins/biteship/') !== false) return false;
-    if (!hw_allow_yith_now()     && stripos($src, '/wp-content/plugins/yith-point-of-sale-for-woocommerce-premium/') !== false) return false;
+    $flags = hw_guard_allow_flags();
+    if (!$flags['biteship'] && stripos($src, '/wp-content/plugins/biteship/') !== false) return false;
+    if (!$flags['yith']     && stripos($src, '/wp-content/plugins/yith-point-of-sale-for-woocommerce-premium/') !== false) return false;
     return $src;
 }, 9999);
 
@@ -159,12 +191,14 @@ function hw_kill_handles_like(string $needle){
     }
 }
 add_action('wp_enqueue_scripts', function(){
-    if (!hw_allow_biteship_now()) hw_kill_handles_like('biteship');
-    if (!hw_allow_yith_now())     hw_kill_handles_like('yith-pos');
+    $flags = hw_guard_allow_flags();
+    if (!$flags['biteship']) hw_kill_handles_like('biteship');
+    if (!$flags['yith'])     hw_kill_handles_like('yith-pos');
 }, 9999);
 add_action('wp_print_footer_scripts', function(){
-    if (!hw_allow_biteship_now()) hw_kill_handles_like('biteship');
-    if (!hw_allow_yith_now())     hw_kill_handles_like('yith-pos');
+    $flags = hw_guard_allow_flags();
+    if (!$flags['biteship']) hw_kill_handles_like('biteship');
+    if (!$flags['yith'])     hw_kill_handles_like('yith-pos');
 }, 9999);
 
 /* ============================================================
@@ -172,6 +206,11 @@ add_action('wp_print_footer_scripts', function(){
  * ============================================================ */
 function hw_buffer_strip_biteship($html){
     if (hw_allow_biteship_now()) return $html;
+
+    if (stripos($html, '/wp-content/plugins/biteship/') === false) {
+        return $html;
+    }
+
     // Hapus <script> & <link> yang mengarah ke folder plugin Biteship
     $html = preg_replace('~<script[^>]+src=["\'][^"\']*/wp-content/plugins/biteship/[^"\']*["\'][^>]*>\s*</script>~i', '', $html);
     $html = preg_replace('~<link[^>]+href=["\'][^"\']*/wp-content/plugins/biteship/[^"\']*["\'][^>]*>~i', '', $html);
