@@ -15,14 +15,19 @@ if (defined('HW_META_PIXEL_SCOPE_DISABLE') && HW_META_PIXEL_SCOPE_DISABLE) {
 
 /** Halaman yang diizinkan memuat Pixel */
 function hw_allow_pixel_here(): bool {
+    static $allowed = null;
+    if ($allowed !== null) {
+        return $allowed;
+    }
+
     // Tetap NO di wp-admin/API
-    if (is_admin()) return false;
-    if (defined('REST_REQUEST') && REST_REQUEST) return false;
+    if (is_admin()) return $allowed = false;
+    if (defined('REST_REQUEST') && REST_REQUEST) return $allowed = false;
 
     // Ya hanya di checkout & thank-you
-    if (function_exists('is_order_received_page') && is_order_received_page()) return true;
-    if (function_exists('is_checkout') && is_checkout()) return true;
-    return false;
+    if (function_exists('is_order_received_page') && is_order_received_page()) return $allowed = true;
+    if (function_exists('is_checkout') && is_checkout()) return $allowed = true;
+    return $allowed = false;
 }
 
 /** Blokir CAPI S3 & Pixel di halaman lain (paling aman: dequeue + deregister) */
