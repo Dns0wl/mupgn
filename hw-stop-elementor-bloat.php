@@ -12,41 +12,62 @@ if (!defined('ABSPATH')) exit;
  * Aman untuk singular (page/post). Untuk archive/search, kita cek keberadaan Template Kit via hook render.
  */
 function hw_is_current_request_elementor_built(): bool {
-    // Ajax/REST editor Elementor: biarkan lewat
-    if (defined('DOING_AJAX') && DOING_AJAX) return true;
-    if (defined('REST_REQUEST') && REST_REQUEST) return true;
-    if (is_admin()) return true;
+    static $cached = null;
+    if ($cached !== null) {
+        return $cached;
+    }
 
-    // Singular: cek meta _elementor_edit_mode / _elementor_data
+    // Ajax/REST editor Elementor atau wp-admin harus lolos.
+    if (defined('DOING_AJAX') && DOING_AJAX) return $cached = true;
+    if (defined('REST_REQUEST') && REST_REQUEST) return $cached = true;
+    if (is_admin()) return $cached = true;
+
+    // Singular: cek meta _elementor_edit_mode / _elementor_data.
     if (is_singular()) {
         $post_id = get_queried_object_id();
         if ($post_id) {
             $edit_mode = get_post_meta($post_id, '_elementor_edit_mode', true);
-            if ($edit_mode === 'builder') return true;
+            if ($edit_mode === 'builder') {
+                return $cached = true;
+            }
 
             $data = get_post_meta($post_id, '_elementor_data', true);
-            if (!empty($data)) return true;
+            if (!empty($data)) {
+                return $cached = true;
+            }
         }
     }
 
-    // Theme Builder (header/footer/archive) bisa menyuntik meski bukan singular.
-    // Kita deteksi sangat late: kalau Elementor sudah menandai akan render, flag-kan di global.
-    static $flag = null;
-    if ($flag !== null) return $flag;
+    // Elementor punya helper internal yang lebih ringan.
+    if (did_action('elementor/loaded') && class_exists('Elementor\\Plugin')) {
+        try {
+            $plugin = \Elementor\Plugin::instance();
 
-    $flag = false;
-    add_action('elementor/frontend/before_render', function() use (&$flag){ $flag = true; }, 1);
+            if ($plugin && isset($plugin->frontend) && method_exists($plugin->frontend, 'has_elementor_in_page')) {
+                if ($plugin->frontend->has_elementor_in_page()) {
+                    return $cached = true;
+                }
+            }
 
-    // Jalankan the_content sekali (pada template tertentu dibutuhkan) — aman no-op jika tidak relevan.
-    // Tidak meng-echo apa pun; hanya memicu hook jika ada.
-    if (!is_admin() && have_posts()) {
-        ob_start();
-        while (have_posts()) { the_post(); get_the_content(); }
-        ob_end_clean();
-        rewind_posts();
+            if ($plugin && isset($plugin->documents) && method_exists($plugin->documents, 'get_current')) {
+                $document = $plugin->documents->get_current();
+                if ($document) {
+                    if (method_exists($document, 'is_built_with_elementor')) {
+                        if ($document->is_built_with_elementor()) {
+                            return $cached = true;
+                        }
+                    } else {
+                        // Jika dokumen terdeteksi namun tanpa method helper, anggap Elementor aktif.
+                        return $cached = true;
+                    }
+                }
+            }
+        } catch (\Throwable $e) {
+            // Jika helper Elementor gagal, lanjutkan ke fallback default (anggap non-Elementor).
+        }
     }
 
-    return $flag;
+    return $cached = false;
 }
 
 /**
